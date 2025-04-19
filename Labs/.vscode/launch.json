@@ -7,8 +7,8 @@
         {
             "type": "chrome",
             "request": "launch",
-            "name": "Launch Chrome against file",
-            "url": "file:///c:/Users/josea/Documents/School/GEOG%20478/GEOG-JoseMeckel-GEOG478/Labs/LABweek07/Task1D3.html",
+            "name": "Launch Chrome against current file",
+            "file": "${file}", 
             "webRoot": "${workspaceFolder}"
         }
     ]
