@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>HTML Geolocation with Map</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <!-- Esri Leaflet CSS (optional, for style consistency) -->
+    <link rel="stylesheet" href="style.CSS" />
+    <style>
+      #map {
+        height: 500px;
+        width: 100%;
+      }
+    </style>
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <!-- Esri Leaflet JS -->
+    <script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
+  </head>
+
+  <body>
+    <header>
+      <h1>ProxiStorm</h1>
+      <nav>
+        <a href="index.html">Home</a>
+        <a href="about.html">About</a>
+        <a href="contact.html">Contact</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="front">
+        <h2>ProxiStorm: Your Personalized Flood Risk Assessment</h2>
+        <p>Click 'Get Started' to allow the browser to access your location</p>
+        <button onclick="getLocation()">Get started</button>
+      </section>
+
+      <!-- Address bar -->
+      <section class="address-search">
+        <h3>Search for an Address</h3>
+        <input type="text" id="addressInput" placeholder="Enter an address" />
+        <button onclick="searchAddress()">Search</button>
+      </section>
+
+      <!-- Map Section -->
+      <div id="map"></div>
+
+      <section class="features">
+        <div class="card">
+          <h3>Data Sources</h3>
+          <p>Click to view a comprehensive list of sources for this research</p>
+          <a href="data-sources.html">
+            <button class="wide-button">View Data Sources</button>
+          </a>
+        </div>
+      </section>
+    </main>
+
+    <p id="demo"></p>
+
+    <script>
+      const x = document.getElementById("demo");
+      let map, marker, precipitationLayer, thunderstormLayer;
+
+      // Haversine Distance Calculation
+      function haversine(lat1, lon1, lat2, lon2) {
+        const R = 6371;
+        const dLat = ((lat2 - lat1) * Math.PI) / 180;
+        const dLon = ((lon2 - lon1) * Math.PI) / 180;
+        const a =
+          Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+          Math.cos((lat1 * Math.PI) / 180) *
+            Math.cos((lat2 * Math.PI) / 180) *
+            Math.sin(dLon / 2) *
+            Math.sin(dLon / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        return R * c;
+      }
+
+      //ADDED
+      const bufferDistances = [0, 250, 500, 1000]; // meters
+      const riskLevels = ["Extreme", "High", "Moderate", "Low"];
+      const riskColors = {
+        Extreme: "darkred",
+        High: "orangered",
+        Moderate: "orange",
+        Low: "yellow",
+        Minimal: "green",
+      };
+
+      function initMap(lat, lon) {
+        map = L.map("map").setView([lat, lon], 13);
+        L.tileLayer(
+          "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+          {
+            attribution:
+              '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
+            subdomains: "abcd",
+            maxZoom: 19,
+          }
+        ).addTo(map);
+
+        marker = L.marker([lat, lon])
+          .addTo(map)
+          .bindPopup("You are here!")
+          .openPopup();
+
+        // Add ESRI Feature Layer
+        L.esri
+          .featureLayer({
+            url: "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Flood_Hazard_Reduced_Set_gdb/FeatureServer/0",
+            style: function (feature) {
+              switch (feature.properties["esri_symbology"]) {
+                case "0.2% Annual Chance Flood Hazard":
+                  return { color: "green", weight: 2, opacity: 0.7 };
+                case "1% Annual Chance Flood Hazard":
+                  return { color: "#FFEA00", weight: 2, opacity: 0.7 };
+                case "Future Conditions 1% Annual Chance Flood Hazard":
+                  return { color: "yellow", weight: 2, opacity: 0.7 };
+                case "Regulatory Floodway":
+                  return { color: "orange", weight: 2, opacity: 0.7 };
+                case "Area with Reduced Risk Due to Levee":
+                  return { color: "#FFC300", weight: 2, opacity: 0.7 };
+                case "Special Floodway":
+                  return { color: "orangered", weight: 2, opacity: 0.7 };
+                default:
+                  return { color: "darkred", weight: 2, opacity: 0.7 };
+              }
+            },
+            onEachFeature: function (feature, layer) {
+              const floodZone = feature.properties["esri_symbology"];
+              const popupContent = `<b>Flood Zone:</b> ${floodZone}`;
+              layer.bindPopup(popupContent);
+            },
+          })
+          .addTo(map);
+
+        // Add Total Precipitation Layer
+        addCumulativeTotalLayer();
+
+        // Add Storm Warnings Layer
+        addThunderstormWarningsLayer();
+
+        // Add Legends
+        addLegend(); 
+        addPrecipitationAndStormLegend();
+      }
+
+      function addCumulativeTotalLayer() {
+        const url =
+          "https://services9.arcgis.com/RHVPKKiFTONKtxq3/ArcGIS/rest/services/NDFD_Precipitation_v1/FeatureServer/2/query?where=category%20%3E%3D%204&outFields=*&geometryPrecision=2&f=geojson";
+
+        fetch(url)
+          .then((response) => response.json())
+          .then((data) => {
+            precipitationLayer = L.geoJSON(data, {
+              style: function (feature) {
+                switch (feature.properties["category"]) {
+                  case 12:
+                  case 13:
+                  case 14:
+                    return { color: "violet", weight: 2, opacity: 0.7, fillOpacity: 0.5 }; // Violet for high precipitation
+                  case 8:
+                  case 9:
+                  case 10:
+                  case 11:
+                    return { color: "indigo", weight: 2, opacity: 0.7, fillOpacity: 0.5 }; // Indigo for moderate precipitation
+                  case 4:
+                  case 5:
+                  case 6:
+                  case 7:
+                    return { color: "blue", weight: 2, opacity: 0.7, fillOpacity: 0.5 }; // Blue for light precipitation
+                  default:
+                    return null;
+                }
+              },
+              onEachFeature: function (feature, layer) {
+                const popupContent = `
+                  <b>Cumulative Precipitation:</b><br>
+                  This is the forecasted precipitation in the next 72 hours.<br>
+                  Range: ${feature.properties["label"] || "N/A"}
+                `;
+                layer.bindPopup(popupContent);
+              },
+            });
+
+            precipitationLayer.addTo(map);
+          })
+          .catch((error) => console.error("Error fetching precipitation data:", error));
+      }
+
+      function addThunderstormWarningsLayer() {
+        const thunderstormUrl =
+          "https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/NOAA_short_term_warnings_v1/FeatureServer/0/query?where=1%3D1&outFields=WFO,ETN,UGC,UTC_ISSUE,UTC_EXPIRE&f=geojson";
+
+        thunderstormLayer = L.geoJSON(null, {
+          style: function () {
+            return { color: "magenta", weight: 2, opacity: 0.8 }; // Magenta for warnings
+          },
+          onEachFeature: function (feature, layer) {
+            const popupContent = `
+              <b>Severe Thunderstorm Warning:</b><br>
+              Weather Office: ${feature.properties.WFO || "N/A"}<br>
+              Event Number: ${feature.properties.ETN || "N/A"}<br>
+              Issued: ${
+                feature.properties.UTC_ISSUE
+                  ? new Date(feature.properties.UTC_ISSUE).toLocaleString("en-US", {
+                      timeZone: "UTC",
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })
+                  : "N/A"
+              } UTC<br>
+              Expires: ${
+                feature.properties.UTC_EXPIRE
+                  ? new Date(feature.properties.UTC_EXPIRE).toLocaleString("en-US", {
+                      timeZone: "UTC",
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })
+                  : "N/A"
+              } UTC
+            `;
+            layer.bindPopup(popupContent);
+          },
+        });
+
+        fetch(thunderstormUrl)
+          .then((response) => response.json())
+          .then((data) => {
+            thunderstormLayer.addData(data).addTo(map);
+          })
+          .catch((error) =>
+            console.error("Error loading thunderstorm warnings:", error)
+          );
+      }
+
+      function getLocation() {
+        if (navigator.geolocation) {
+          // Show the map container with a smooth transition
+          const mapElement = document.getElementById("map");
+          mapElement.classList.add("visible");
+
+          // Start geolocation tracking
+          navigator.geolocation.watchPosition(showPosition);
+        } else {
+          x.innerHTML = "Geolocation is not supported by this browser.";
+        }
+      }
+
+      function showPosition(position) {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+
+        x.innerHTML = "Latitude: " + lat + "<br>Longitude: " + lon;
+
+        if (!map) {
+          initMap(lat, lon);
+        } else {
+          map.setView([lat, lon], 13);
+          marker.setLatLng([lat, lon]);
+        }
+
+        // Query FEMA flood zone
+        const floodLayer = L.esri.featureLayer({
+          url: "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Flood_Hazard_Reduced_Set_gdb/FeatureServer/0",
+        });
+
+        // Distance calculation
+
+        floodLayer
+          .query()
+          .limit(1000)
+          .run(function (error, featureCollection) {
+            if (error) {
+              marker
+                .bindPopup(
+                  "You are here!<br>Unable to determine flood zone status."
+                )
+                .openPopup();
+              return;
+            }
+
+            let closestFeature = null;
+            let minDistance = Infinity;
+
+            featureCollection.features.forEach((feature) => {
+              let coords = feature.geometry.coordinates;
+              let flatCoords =
+                feature.geometry.type === "Polygon" ? coords[0] : coords[0][0];
+
+              const lats = flatCoords.map((pt) => pt[1]);
+              const lons = flatCoords.map((pt) => pt[0]);
+              const centroidLat = lats.reduce((a, b) => a + b, 0) / lats.length;
+              const centroidLon = lons.reduce((a, b) => a + b, 0) / lons.length;
+
+              const distance = haversine(lat, lon, centroidLat, centroidLon);
+
+              if (distance < minDistance) {
+                minDistance = distance;
+                closestFeature = feature;
+              }
+            });
+
+            if (closestFeature) {
+              const zone = closestFeature.properties["esri_symbology"];
+              marker
+                .bindPopup(
+                  `You are here!<br><b>Nearest Flood Zone:</b> ${zone}<br><b>Distance:</b> ${minDistance.toFixed(
+                    2
+                  )} km`
+                )
+                .openPopup();
+            } else {
+              marker
+                .bindPopup("You are here!<br>You are not in a FEMA flood zone.")
+                .openPopup();
+            }
+          });
+      }
+
+      // Search Address Function
+      function searchAddress() {
+        const address = document.getElementById("addressInput").value;
+
+        if (!address) {
+          alert("Please enter an address.");
+          return;
+        }
+
+        // Use a geocoding service (e.g., Nominatim API for simplicity)
+        const geocodeUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+          address
+        )}`;
+
+        fetch(geocodeUrl)
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.length === 0) {
+              alert("Address not found. Please try again.");
+              return;
+            }
+
+            // Get the first result's latitude and longitude
+            const lat = parseFloat(data[0].lat);
+            const lon = parseFloat(data[0].lon);
+
+            // Zoom to the location
+            map.setView([lat, lon], 13);
+
+            // Add a marker at the location
+            const addressMarker = L.marker([lat, lon]).addTo(map);
+
+            // Query the FEMA flood zone layer
+            const floodLayer = L.esri.featureLayer({
+              url: "https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Flood_Hazard_Reduced_Set_gdb/FeatureServer/0",
+            });
+
+            // Distance calculation
+            floodLayer
+              .query()
+              .limit(1000)
+              .run(function (error, featureCollection) {
+                if (error) {
+                  addressMarker
+                    .bindPopup(
+                      `Address: ${address}<br>Unable to determine flood zone status.`
+                    )
+                    .openPopup();
+                  return;
+                }
+
+                let closestFeature = null;
+                let minDistance = Infinity;
+
+                featureCollection.features.forEach((feature) => {
+                  let coords = feature.geometry.coordinates;
+                  let flatCoords =
+                    feature.geometry.type === "Polygon"
+                      ? coords[0]
+                      : coords[0][0];
+
+                  const lats = flatCoords.map((pt) => pt[1]);
+                  const lons = flatCoords.map((pt) => pt[0]);
+                  const centroidLat =
+                    lats.reduce((a, b) => a + b, 0) / lats.length;
+                  const centroidLon =
+                    lons.reduce((a, b) => a + b, 0) / lons.length;
+
+                  const distance = haversine(
+                    lat,
+                    lon,
+                    centroidLat,
+                    centroidLon
+                  );
+
+                  if (distance < minDistance) {
+                    minDistance = distance;
+                    closestFeature = feature;
+                  }
+                });
+
+                if (closestFeature) {
+                  const zone = closestFeature.properties["esri_symbology"];
+                  addressMarker
+                    .bindPopup(
+                      `Address: ${address}<br><b>Nearest Flood Zone:</b> ${zone}<br><b>Distance:</b> ${minDistance.toFixed(
+                        2
+                      )} km`
+                    )
+                    .openPopup();
+                } else {
+                  addressMarker
+                    .bindPopup(
+                      `Address: ${address}<br>No nearby flood zones found.`
+                    )
+                    .openPopup();
+                }
+              });
+          })
+          .catch((error) => {
+            console.error("Error with geocoding:", error);
+            alert("An error occurred while searching for the address.");
+          });
+      }
+
+      //addLegend
+      function addLegend() {
+        const legend = L.control({ position: "bottomright" });
+
+        legend.onAdd = function () {
+          const div = L.DomUtil.create("div", "info legend");
+          div.style.background = "white";
+          div.style.padding = "10px";
+          div.innerHTML = "<h4>Flood Risk Legend</h4>";
+          for (const [level, color] of Object.entries(riskColors)) {
+            div.innerHTML += `<p><span style="color:${color}; font-weight:bold;">■</span> ${level}</p>`;
+          }
+          return div;
+        };
+
+        legend.addTo(map);
+      }
+
+      // Add Precipitation and Storm Legend
+      function addPrecipitationAndStormLegend() {
+        const legend = L.control({ position: "bottomleft" });
+
+        legend.onAdd = function () {
+          const div = L.DomUtil.create("div", "info legend");
+          div.style.background = "white";
+          div.style.padding = "10px";
+
+          // Precipitation Legend
+          div.innerHTML += "<b>Precipitation (72 Hours):</b><br>";
+          const precipitationLevels = { High: "violet", Moderate: "indigo", Light: "blue" };
+          for (const [level, color] of Object.entries(precipitationLevels)) {
+            div.innerHTML += `<p><span style="color:${color}; font-weight:bold;">■</span> ${level}</p>`;
+          }
+
+          // Storm Warnings Legend
+          div.innerHTML += "<b>Storm Warnings:</b><br>";
+          const stormWarningLevels = { "Severe Weather Warning": "magenta" };
+          for (const [level, color] of Object.entries(stormWarningLevels)) {
+            div.innerHTML += `<p><span style="color:${color}; font-weight:bold;">■</span> ${level}</p>`;
+          }
+
+          return div;
+        };
+
+        legend.addTo(map);
+      }
+
+      // Add an event listener to the address input field
+      document
+        .getElementById("addressInput")
+        .addEventListener("keydown", function (event) {
+          if (event.key === "Enter") {
+            event.preventDefault(); // Prevent the default form submission behavior
+            searchAddress(); // Call the searchAddress function
+          }
+        });
+    </script>
+
+    <footer>
+      <p>© ProxiStorm. All rights reserved.</p>
+    </footer>
+  </body>
+</html>
